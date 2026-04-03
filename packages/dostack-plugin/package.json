@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "tsc && cp src/system-prompt.md dist/",
     "test": "bun test"
   },
   "exports": {

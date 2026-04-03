@@ -15,6 +15,8 @@ const dostackPlugin: Plugin = async (input, options) => {
   const client = createApiClient(config)
   const projectDir = input.directory
 
+  const beforePrompt = createBeforePromptHook(projectDir)
+
   return {
     tool: {
       dostack_query_workflows: createQueryWorkflowsTool(client),
@@ -24,8 +26,8 @@ const dostackPlugin: Plugin = async (input, options) => {
       dostack_flag_workflow_gap: createFlagWorkflowGapTool(projectDir),
       dostack_trigger_preview: createTriggerPreviewTool(projectDir),
     },
-    "experimental.chat.system.transform": createBeforePromptHook(projectDir),
-    "tool.execute.after": createAfterResponseHook(projectDir),
+    "experimental.chat.system.transform": beforePrompt.hook,
+    "tool.execute.after": createAfterResponseHook(projectDir, beforePrompt.invalidate),
   }
 }
 

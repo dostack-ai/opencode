@@ -3,8 +3,6 @@ import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 import { scanArtifactState, formatArtifactState, type ArtifactState } from "../artifact-state"
 
-let cachedState: ArtifactState | null = null
-let cacheTimestamp = 0
 const CACHE_TTL_MS = 10_000
 
 async function loadSystemPrompt(): Promise<string> {
@@ -12,15 +10,17 @@ async function loadSystemPrompt(): Promise<string> {
   return readFile(promptPath, "utf-8")
 }
 
-let systemPromptCache: string | null = null
-
-export function invalidateArtifactCache() {
-  cachedState = null
-  cacheTimestamp = 0
-}
-
 export function createBeforePromptHook(projectDir: string) {
-  return async (
+  let cachedState: ArtifactState | null = null
+  let cacheTimestamp = 0
+  let systemPromptCache: string | null = null
+
+  const invalidate = () => {
+    cachedState = null
+    cacheTimestamp = 0
+  }
+
+  const hook = async (
     _input: { sessionID?: string; model: any },
     output: { system: string[] },
   ) => {
@@ -37,4 +37,6 @@ export function createBeforePromptHook(projectDir: string) {
 
     output.system.push(formatArtifactState(cachedState))
   }
+
+  return { hook, invalidate }
 }

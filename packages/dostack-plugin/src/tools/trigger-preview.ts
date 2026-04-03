@@ -1,7 +1,10 @@
 import { tool } from "@opencode-ai/plugin/tool"
 import { writeFile, mkdir } from "fs/promises"
 import { join } from "path"
-import { execSync } from "child_process"
+import { exec } from "child_process"
+import { promisify } from "util"
+
+const execAsync = promisify(exec)
 
 type BuildError = {
   file?: string
@@ -34,9 +37,8 @@ export async function triggerPreview(
   const start = Date.now()
 
   try {
-    execSync(command, {
+    await execAsync(command, {
       cwd: projectDir,
-      stdio: ["pipe", "pipe", "pipe"],
       timeout: 120_000,
       env: { ...process.env, NODE_ENV: "production" },
     })

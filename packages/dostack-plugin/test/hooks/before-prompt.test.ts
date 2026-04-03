@@ -13,7 +13,7 @@ describe("beforePromptHook", () => {
     await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
     await writeFile(join(dir, "frontend/src/domain/pages/Dashboard.tsx"), "export default function Dashboard() {}")
 
-    const hook = createBeforePromptHook(dir)
+    const { hook } = createBeforePromptHook(dir)
 
     const input = { model: { modelID: "gemini-2.5-pro", providerID: "google" } }
     const output = { system: ["existing system prompt"] }
