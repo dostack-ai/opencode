@@ -23,7 +23,8 @@
       "packages/sdk/js",
       "packages/plugin",
       "packages/util",
-      "packages/script"
+      "packages/script",
+      "packages/dostack-plugin"
     ],
     "catalog": {
       "@effect/platform-node": "4.0.0-beta.43",
