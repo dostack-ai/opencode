@@ -15,7 +15,7 @@ function parseErrors(output: string): BuildError[] {
   let match
   while ((match = pattern.exec(output)) !== null) {
     if (match[1]) {
-      errors.push({ file: match[1], line: parseInt(match[2], 10), message: match[3] })
+      errors.push({ file: match[1], line: parseInt(match[2]!, 10), message: match[3]! })
     } else if (match[4]) {
       errors.push({ message: match[4] })
     }

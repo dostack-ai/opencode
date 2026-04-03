@@ -36,13 +36,13 @@ function extractTables(sql: string): { tables: string[]; columnCount: number } {
   const tableRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(([\s\S]*?)(?:\);)/gi
   let match
   while ((match = tableRegex.exec(sql)) !== null) {
-    tables.push(match[1])
-    const body = match[2]
+    tables.push(match[1]!)
+    const body = match[2]!
     const lines = body.split(",").map((l) => l.trim())
     for (const line of lines) {
       const colMatch = line.match(/^(\w+)\s+/)
       if (colMatch) {
-        const name = colMatch[1].toLowerCase()
+        const name = colMatch[1]!.toLowerCase()
         if (!["primary", "unique", "check", "foreign", "constraint", "index"].includes(name)) {
           totalColumns++
         }
@@ -61,9 +61,9 @@ function extractWiring(content: string): { workflows: WiringInfo[]; phases: stri
   const wfIdRegex = /(\w+)\s*:\s*\{[^{}]*workflowId\s*:\s*["']([^"']+)["'][^{}]*outputMapping\s*:\s*\{([^{}]*)\}/g
   let match
   while ((match = wfIdRegex.exec(content)) !== null) {
-    const mappingBlock = match[3]
+    const mappingBlock = match[3]!
     const fieldCount = (mappingBlock.match(/\w+\s*:/g) ?? []).length
-    workflows.push({ name: match[1], workflowId: match[2], outputFieldCount: fieldCount })
+    workflows.push({ name: match[1]!, workflowId: match[2]!, outputFieldCount: fieldCount })
   }
 
   const phases: string[] = []
@@ -71,8 +71,8 @@ function extractWiring(content: string): { workflows: WiringInfo[]; phases: stri
   if (phaseMatch) {
     const phaseRegex = /["']([^"']+)["']/g
     let pm
-    while ((pm = phaseRegex.exec(phaseMatch[1])) !== null) {
-      phases.push(pm[1])
+    while ((pm = phaseRegex.exec(phaseMatch[1]!)) !== null) {
+      phases.push(pm[1]!)
     }
   }
 

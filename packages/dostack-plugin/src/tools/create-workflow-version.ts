@@ -82,7 +82,7 @@ export function createCreateWorkflowVersionTool(client: ApiClient) {
         .array(
           tool.schema.object({
             step_key: tool.schema.string().describe("The step key to modify"),
-            structured_output_schema: tool.schema.record(tool.schema.unknown()).describe("New structured output schema for this step"),
+            structured_output_schema: tool.schema.record(tool.schema.string(), tool.schema.unknown()).describe("New structured output schema for this step"),
           }),
         )
         .describe("Array of step modifications with new output schemas"),
