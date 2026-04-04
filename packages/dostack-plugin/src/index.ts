@@ -15,7 +15,7 @@ const dostackPlugin: Plugin = async (input, options) => {
   const client = createApiClient(config)
   const projectDir = input.directory
 
-  const beforePrompt = createBeforePromptHook(projectDir)
+  const beforePrompt = createBeforePromptHook(projectDir, client)
 
   return {
     tool: {
