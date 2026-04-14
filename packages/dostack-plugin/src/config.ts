@@ -4,6 +4,7 @@ export const DostackConfigSchema = z.object({
   api_url: z.string().url("api_url must be a valid URL"),
   api_key: z.string().startsWith("dsk_", "api_key must start with 'dsk_'"),
   workbench_id: z.string().min(1, "workbench_id must not be empty"),
+  workbench_slug: z.string().optional(),
   template_version: z.string().optional(),
   internal_api_url: z.string().url().optional(),
   internal_api_token: z.string().optional(),

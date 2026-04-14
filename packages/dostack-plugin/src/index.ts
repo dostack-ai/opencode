@@ -7,6 +7,7 @@ import { createCreateWorkflowVersionTool } from "./tools/create-workflow-version
 import { createValidateWiringTool } from "./tools/validate-wiring"
 import { createFlagWorkflowGapTool } from "./tools/flag-workflow-gap"
 import { createTriggerPreviewTool } from "./tools/trigger-preview"
+import { createGetRuntimeErrorsTool } from "./tools/get-runtime-errors"
 import { createBeforePromptHook } from "./hooks/before-prompt"
 import { createAfterResponseHook } from "./hooks/after-response"
 
@@ -25,6 +26,7 @@ const dostackPlugin: Plugin = async (input, options) => {
       dostack_validate_wiring: createValidateWiringTool(client, projectDir),
       dostack_flag_workflow_gap: createFlagWorkflowGapTool(projectDir),
       dostack_trigger_preview: createTriggerPreviewTool(projectDir),
+      dostack_get_runtime_errors: createGetRuntimeErrorsTool(config),
     },
     "experimental.chat.system.transform": beforePrompt.hook,
     "tool.execute.after": createAfterResponseHook(projectDir, beforePrompt.invalidate),

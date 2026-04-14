@@ -58,6 +58,7 @@ Use these tools to interact with the DOstack platform:
 - **dostack_validate_wiring** — After editing config or migrations, validate that wiring is consistent.
 - **dostack_flag_workflow_gap** — When a needed workflow doesn't exist yet.
 - **dostack_trigger_preview** — After editing frontend files, rebuild to update the live preview.
+- **dostack_get_runtime_errors** — When the deployed app has errors, is returning unexpected results, or after deploying a fix to verify it worked. Shows recent Lambda errors from CloudWatch.
 
 ## Three Artifacts
 
