@@ -32,7 +32,7 @@ describe("plugin module shape", () => {
       },
     )
 
-    // Verify all 6 tools are registered
+    // Verify all 7 tools are registered
     expect(hooks.tool).toBeDefined()
     expect(hooks.tool!.dostack_query_workflows).toBeDefined()
     expect(hooks.tool!.dostack_get_workflow_schema).toBeDefined()
@@ -40,6 +40,7 @@ describe("plugin module shape", () => {
     expect(hooks.tool!.dostack_validate_wiring).toBeDefined()
     expect(hooks.tool!.dostack_flag_workflow_gap).toBeDefined()
     expect(hooks.tool!.dostack_trigger_preview).toBeDefined()
+    expect(hooks.tool!.dostack_get_runtime_errors).toBeDefined()
 
     // Verify hooks
     expect(typeof hooks["experimental.chat.system.transform"]).toBe("function")
