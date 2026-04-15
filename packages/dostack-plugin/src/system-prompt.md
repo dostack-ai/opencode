@@ -60,6 +60,48 @@ Use these tools to interact with the DOstack platform:
 - **dostack_trigger_preview** — After editing frontend files, rebuild to update the live preview.
 - **dostack_get_runtime_errors** — When the deployed app has errors, is returning unexpected results, or after deploying a fix to verify it worked. Shows recent Lambda errors from CloudWatch.
 
+## File Upload Pattern
+
+For fields that accept file uploads (documents, attachments, images):
+- Use the `FileUpload` component from `@/components/content/FileUpload`
+- FileUpload requires an existing entity ID — it can't be used during entity creation
+- Create forms with file fields must: create entity first → upload file → PATCH entity with s3_key
+- Make file columns nullable in migrations to support this two-step pattern
+- Do NOT use text inputs for file paths or S3 URIs
+
+## Workflow Auto-Trigger
+
+To auto-trigger a workflow when an entity reaches a specific phase:
+1. Wire the workflow binding in `config.ts` with a `trigger` field
+2. On the entity detail page, conditionally render `WorkflowRunner` with `autoRun`:
+   ```tsx
+   {entity.phase === 'target_phase' && !entity.result_field && (
+     <WorkflowRunner
+       workflowId={config.workflows.key.workflowId}
+       entityId={entity.id}
+       entityType="entity_type"
+       inputMapping={config.workflows.key.inputMapping}
+       outputMapping={config.workflows.key.outputMapping}
+       entity={entity}
+       autoRun
+     />
+   )}
+   ```
+3. `outputMapping` keys are step_keys from the workflow definition, not field names
+4. On success, WorkflowRunner auto-PATCHes the entity and invalidates the cache
+
+## Sidebar Icons
+
+Navigation entries in `config.ts` reference icons by string name. These must exist in the `ICON_MAP` object in `frontend/src/components/layout/Sidebar.tsx`. If you add a new nav entry with an icon not in the map, import it from `lucide-react` and add it to `ICON_MAP`.
+
+## Demo Entity Cleanup
+
+The template ships with a demo `items` entity. Before creating your domain entities:
+1. Delete `backend/migrations/001_demo_items.sql`
+2. Delete `frontend/src/domain/pages/ItemsList.tsx` and `ItemDetail.tsx`
+3. Delete `frontend/src/domain/components/ItemForm.tsx`
+4. Your migrations start at `001_`.
+
 ## Three Artifacts
 
 You generate and maintain three artifacts:
