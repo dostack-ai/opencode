@@ -4,13 +4,30 @@ const FILE_WRITE_TOOLS = new Set(["write", "edit"])
 const FRONTEND_PREFIXES = ["frontend/"]
 const DEBOUNCE_MS = 2_000
 
-export function createAfterResponseHook(projectDir: string, invalidateCache: () => void) {
+const BUILD_COMPLETE_PATTERNS = [
+  /build\s+complete/i,
+  /all\s+tasks?\s+done/i,
+  /all\s+todos?\s+complete/i,
+  /ready\s+to\s+deploy/i,
+  /build\s+passes?\s+cleanly/i,
+]
+
+export function createAfterResponseHook(
+  projectDir: string,
+  invalidateCache: () => void,
+  setVerificationPending: (pending: boolean) => void,
+) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
   return async (
-    input: { tool: string; sessionID: string; callID: string; args: any },
+    input: { tool: string; sessionID: string; callID: string; args: any; response?: string },
     _output: { title: string; output: string; metadata: any },
   ) => {
+    const responseText = input.response ?? _output.output ?? ""
+    if (BUILD_COMPLETE_PATTERNS.some((p) => p.test(responseText))) {
+      setVerificationPending(true)
+    }
+
     if (!FILE_WRITE_TOOLS.has(input.tool)) return
 
     invalidateCache()

@@ -29,7 +29,7 @@ const dostackPlugin: Plugin = async (input, options) => {
       dostack_get_runtime_errors: createGetRuntimeErrorsTool(config),
     },
     "experimental.chat.system.transform": beforePrompt.hook,
-    "tool.execute.after": createAfterResponseHook(projectDir, beforePrompt.invalidate),
+    "tool.execute.after": createAfterResponseHook(projectDir, beforePrompt.invalidate, beforePrompt.setVerificationPending),
   }
 }
 

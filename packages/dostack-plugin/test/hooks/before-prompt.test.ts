@@ -136,4 +136,46 @@ describe("beforePromptHook", () => {
     // Second call should use cache — API should have been called only once
     expect(callCount).toBe(1)
   })
+
+  test("injects verification checklist when verification is pending", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-hook-"))
+
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+
+    const { hook, setVerificationPending } = createBeforePromptHook(dir)
+
+    setVerificationPending(true)
+
+    const input = { model: { modelID: "gemini-2.5-pro", providerID: "google" } }
+    const output = { system: [] as string[] }
+
+    await hook(input as any, output)
+
+    const checklist = output.system.find((s) => s.includes("Post-Build Verification Required"))
+    expect(checklist).toBeDefined()
+    expect(checklist).toContain("dostack_validate_wiring")
+    expect(checklist).toContain("dostack_trigger_preview")
+  })
+
+  test("injects verification checklist only once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-hook-"))
+
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+
+    const { hook, setVerificationPending } = createBeforePromptHook(dir)
+
+    setVerificationPending(true)
+
+    const input = { model: { modelID: "gemini-2.5-pro", providerID: "google" } }
+
+    const output1 = { system: [] as string[] }
+    await hook(input as any, output1)
+    expect(output1.system.some((s) => s.includes("Post-Build Verification Required"))).toBe(true)
+
+    const output2 = { system: [] as string[] }
+    await hook(input as any, output2)
+    expect(output2.system.some((s) => s.includes("Post-Build Verification Required"))).toBe(false)
+  })
 })

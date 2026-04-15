@@ -36,16 +36,34 @@ function formatRegistry(workflows: WorkflowEntry[]): string {
   return lines.join("\n")
 }
 
+const VERIFICATION_CHECKLIST = `## Post-Build Verification Required
+
+Before declaring the build complete, run these checks:
+1. Call dostack_validate_wiring to verify workflow config consistency
+2. Call dostack_trigger_preview to verify the frontend builds cleanly
+3. Review the Issues section in the artifact state above — fix any flagged problems
+4. Verify you deleted demo files (001_demo_items.sql, ItemsList.tsx, ItemDetail.tsx, ItemForm.tsx)
+
+Do not report completion until all checks pass.`
+
 export function createBeforePromptHook(projectDir: string, client?: ApiClient) {
   let cachedState: ArtifactState | null = null
   let cacheTimestamp = 0
   let systemPromptCache: string | null = null
   let registryCache: string | null = null
   let registryTimestamp = 0
+  let verificationPending = false
+  let verificationInjected = false
 
   const invalidate = () => {
     cachedState = null
     cacheTimestamp = 0
+  }
+
+  const setVerificationPending = (pending: boolean) => {
+    if (pending && !verificationInjected) {
+      verificationPending = true
+    }
   }
 
   const hook = async (
@@ -79,7 +97,13 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient) {
         output.system.push(registryCache)
       }
     }
+
+    if (verificationPending && !verificationInjected) {
+      output.system.push(VERIFICATION_CHECKLIST)
+      verificationInjected = true
+      verificationPending = false
+    }
   }
 
-  return { hook, invalidate }
+  return { hook, invalidate, setVerificationPending }
 }
