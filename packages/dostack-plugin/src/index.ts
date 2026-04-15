@@ -10,6 +10,7 @@ import { createTriggerPreviewTool } from "./tools/trigger-preview"
 import { createGetRuntimeErrorsTool } from "./tools/get-runtime-errors"
 import { createBeforePromptHook } from "./hooks/before-prompt"
 import { createAfterResponseHook, createTextCompleteHook } from "./hooks/after-response"
+import { createBuildStatusReporter } from "./build-status"
 
 const dostackPlugin: Plugin = async (input, options) => {
   const config = parseDostackConfig(options ?? {})
@@ -17,6 +18,13 @@ const dostackPlugin: Plugin = async (input, options) => {
   const projectDir = input.directory
 
   const beforePrompt = createBeforePromptHook(projectDir, client, { config })
+  const buildStatus = createBuildStatusReporter(client, config)
+
+  // Combine invalidate with status reset so re-arming also resets build status
+  const invalidateAndReset = () => {
+    beforePrompt.invalidate()
+    buildStatus.resetStatus()
+  }
 
   return {
     tool: {
@@ -29,8 +37,11 @@ const dostackPlugin: Plugin = async (input, options) => {
       dostack_get_runtime_errors: createGetRuntimeErrorsTool(config),
     },
     "experimental.chat.system.transform": beforePrompt.hook,
-    "tool.execute.after": createAfterResponseHook(projectDir, beforePrompt.invalidate),
-    "experimental.text.complete": createTextCompleteHook(beforePrompt.setVerificationPending),
+    "tool.execute.after": createAfterResponseHook(projectDir, invalidateAndReset, buildStatus.reportBuilding),
+    "experimental.text.complete": createTextCompleteHook(beforePrompt.setVerificationPending, {
+      isVerificationComplete: beforePrompt.isVerificationComplete,
+      reportComplete: buildStatus.reportComplete,
+    }),
   }
 }
 

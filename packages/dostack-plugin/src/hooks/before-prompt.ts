@@ -163,5 +163,7 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient, r
     }
   }
 
-  return { hook, invalidate, setVerificationPending }
+  const isVerificationComplete = () => verificationInjected
+
+  return { hook, invalidate, setVerificationPending, isVerificationComplete }
 }

@@ -4,7 +4,11 @@ const FILE_WRITE_TOOLS = new Set(["write", "edit"])
 const FRONTEND_PREFIXES = ["frontend/"]
 const DEBOUNCE_MS = 2_000
 
-export function createAfterResponseHook(projectDir: string, invalidateCache: () => void) {
+export function createAfterResponseHook(
+  projectDir: string,
+  invalidateCache: () => void,
+  reportBuilding?: () => void,
+) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
   return async (
@@ -14,6 +18,7 @@ export function createAfterResponseHook(projectDir: string, invalidateCache: () 
     if (!FILE_WRITE_TOOLS.has(input.tool)) return
 
     invalidateCache()
+    reportBuilding?.()
 
     const filePath: string = input.args?.filePath ?? input.args?.file_path ?? input.args?.path ?? ""
     const isFrontend = FRONTEND_PREFIXES.some((p) => filePath.includes(p))
@@ -39,12 +44,26 @@ const BUILD_COMPLETE_PATTERNS = [
   /\bbuild\s+passes?\s+cleanly\b/i,
 ]
 
-export function createTextCompleteHook(setVerificationPending: (pending: boolean) => void) {
+export function createTextCompleteHook(
+  setVerificationPending: (pending: boolean) => void,
+  options?: {
+    isVerificationComplete?: () => boolean
+    reportComplete?: () => Promise<void>
+  },
+) {
   return async (
     _input: { sessionID: string; messageID: string; partID: string },
     output: { text: string },
   ) => {
-    if (BUILD_COMPLETE_PATTERNS.some((p) => p.test(output.text))) {
+    if (!BUILD_COMPLETE_PATTERNS.some((p) => p.test(output.text))) return
+
+    // If verification was already injected and no files written since,
+    // the AI reviewed the checklist and is satisfied → signal complete
+    if (options?.isVerificationComplete?.()) {
+      options.reportComplete?.().catch((err: unknown) =>
+        console.error("Failed to report build complete:", err),
+      )
+    } else {
       setVerificationPending(true)
     }
   }
