@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { scanArtifactState } from "../src/artifact-state"
+import { scanArtifactState, formatArtifactState } from "../src/artifact-state"
 import { mkdtemp, writeFile, mkdir } from "fs/promises"
 import { join } from "path"
 import { tmpdir } from "os"
@@ -86,5 +86,147 @@ describe("scanArtifactState", () => {
     expect(state.migrations).toEqual([])
     expect(state.pages).toEqual([])
     expect(state.gaps).toEqual([])
+  })
+})
+
+describe("issue detection", () => {
+  test("flags demo migration when domain migrations exist", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/001_demo_items.sql"),
+      "CREATE TABLE demo_items (id UUID PRIMARY KEY, name TEXT);",
+    )
+    await writeFile(
+      join(dir, "backend/migrations/002_rfps.sql"),
+      "CREATE TABLE rfps (id UUID PRIMARY KEY, title TEXT);",
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.type === "error" && i.message.includes("001_demo_items.sql"))).toBe(true)
+  })
+
+  test("does not flag demo migration when it is the only migration", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/001_demo_items.sql"),
+      "CREATE TABLE demo_items (id UUID PRIMARY KEY, name TEXT);",
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.message.includes("001_demo_items.sql"))).toBe(false)
+  })
+
+  test("flags unregistered entities missing from ALLOWED_ENTITY_TYPES", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/001_rfps.sql"),
+      "CREATE TABLE rfps (id UUID PRIMARY KEY, title TEXT);",
+    )
+    await writeFile(
+      join(dir, "workbench-template.yaml"),
+      'ALLOWED_ENTITY_TYPES: "proposals"',
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.type === "error" && i.message.includes("rfps"))).toBe(true)
+  })
+
+  test("does not flag base tables as unregistered", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/000_base.sql"),
+      "CREATE TABLE users (id UUID PRIMARY KEY, name TEXT);\nCREATE TABLE notifications (id UUID PRIMARY KEY, msg TEXT);",
+    )
+    await writeFile(
+      join(dir, "workbench-template.yaml"),
+      'ALLOWED_ENTITY_TYPES: "other"',
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.message.includes("users"))).toBe(false)
+    expect(state.issues.some((i) => i.message.includes("notifications"))).toBe(false)
+  })
+
+  test("flags icons referenced in config but missing from ICON_MAP", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "frontend/src/domain"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/config.ts"),
+      `export const config = {
+  entities: [
+    { icon: "FileText", label: "Docs" },
+    { icon: "BarChart", label: "Stats" },
+  ],
+}`,
+    )
+    await mkdir(join(dir, "frontend/src/components/layout"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/components/layout/Sidebar.tsx"),
+      `const ICON_MAP = {
+  FileText: FileTextIcon,
+  Home: HomeIcon,
+}`,
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.type === "error" && i.message.includes("BarChart"))).toBe(true)
+    expect(state.issues.some((i) => i.message.includes("FileText"))).toBe(false)
+  })
+
+  test("flags file-type columns using text inputs instead of FileUpload (warning)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/001_docs.sql"),
+      "CREATE TABLE documents (id UUID PRIMARY KEY, document_url TEXT, title TEXT);",
+    )
+    await mkdir(join(dir, "frontend/src/domain/components"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/components/DocForm.tsx"),
+      `export function DocForm() { return <TextInput name="document_url" /> }`,
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.type === "warning" && i.message.includes("document_url"))).toBe(true)
+  })
+
+  test("does not flag file-type columns when FileUpload is used", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/001_docs.sql"),
+      "CREATE TABLE documents (id UUID PRIMARY KEY, document_url TEXT, title TEXT);",
+    )
+    await mkdir(join(dir, "frontend/src/domain/components"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/components/DocForm.tsx"),
+      `import { FileUpload } from "@/components/FileUpload"
+export function DocForm() { return <FileUpload name="document_url" /> }`,
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.message.includes("document_url"))).toBe(false)
+  })
+
+  test("formatArtifactState renders Issues section when issues exist", () => {
+    const state = {
+      migrations: [],
+      config: { workflows: [], phases: [] },
+      pages: [],
+      gaps: [],
+      issues: [{ type: "error" as const, message: "Demo migration still present" }],
+    }
+    const output = formatArtifactState(state)
+    expect(output).toContain("### Issues")
+    expect(output).toContain("[ERROR] Demo migration still present")
+  })
+
+  test("formatArtifactState omits Issues section when no issues exist", () => {
+    const state = {
+      migrations: [],
+      config: { workflows: [], phases: [] },
+      pages: [],
+      gaps: [],
+      issues: [],
+    }
+    const output = formatArtifactState(state)
+    expect(output).not.toContain("### Issues")
   })
 })

@@ -19,6 +19,11 @@ export type WorkflowGapInfo = {
   capabilityTypes: string[]
 }
 
+export type Issue = {
+  type: "error" | "warning"
+  message: string
+}
+
 export type ArtifactState = {
   migrations: MigrationInfo[]
   config: {
@@ -27,6 +32,7 @@ export type ArtifactState = {
   }
   pages: string[]
   gaps: WorkflowGapInfo[]
+  issues: Issue[]
 }
 
 function extractTables(sql: string): { tables: string[]; columnCount: number } {
@@ -79,6 +85,122 @@ function extractWiring(content: string): { workflows: WiringInfo[]; phases: stri
   return { workflows, phases }
 }
 
+const BASE_TABLES = new Set(["users", "notifications", "activities", "comments", "files", "_migrations"])
+
+async function detectIssues(projectDir: string, migrations: MigrationInfo[]): Promise<Issue[]> {
+  const issues: Issue[] = []
+
+  // a) Demo file check
+  try {
+    const hasDemoMigration = migrations.some((m) => m.file === "001_demo_items.sql")
+    const hasOtherDomainMigrations = migrations.some(
+      (m) => m.file !== "001_demo_items.sql" && !m.file.startsWith("000_"),
+    )
+    if (hasDemoMigration && hasOtherDomainMigrations) {
+      issues.push({ type: "error", message: "Demo migration still present — delete 001_demo_items.sql" })
+    }
+  } catch {}
+
+  // b) Entity registration check
+  try {
+    const yamlContent = await readFile(join(projectDir, "workbench-template.yaml"), "utf-8")
+    const allowedMatch = yamlContent.match(/ALLOWED_ENTITY_TYPES:\s*"([^"]*)"/)
+    if (allowedMatch) {
+      const allowedTypes = new Set(allowedMatch[1]!.split(",").map((s) => s.trim()).filter(Boolean))
+      const allTables = migrations.flatMap((m) => m.tables)
+      for (const table of allTables) {
+        if (!BASE_TABLES.has(table) && !allowedTypes.has(table)) {
+          issues.push({
+            type: "error",
+            message: `Table "${table}" exists in migrations but is not registered in ALLOWED_ENTITY_TYPES`,
+          })
+        }
+      }
+    }
+  } catch {}
+
+  // c) Icon map check
+  try {
+    const configContent = await readFile(join(projectDir, "frontend/src/domain/config.ts"), "utf-8")
+    const sidebarContent = await readFile(
+      join(projectDir, "frontend/src/components/layout/Sidebar.tsx"),
+      "utf-8",
+    )
+
+    const configIcons = new Set<string>()
+    const iconRegex = /icon\s*:\s*["'](\w+)["']/g
+    let iconMatch
+    while ((iconMatch = iconRegex.exec(configContent)) !== null) {
+      configIcons.add(iconMatch[1]!)
+    }
+
+    const mapIcons = new Set<string>()
+    const mapBlockMatch = sidebarContent.match(/ICON_MAP\s*=\s*\{([^}]+)\}/)
+    if (mapBlockMatch) {
+      const keyRegex = /(\w+)\s*:/g
+      let keyMatch
+      while ((keyMatch = keyRegex.exec(mapBlockMatch[1]!)) !== null) {
+        mapIcons.add(keyMatch[1]!)
+      }
+    }
+
+    for (const icon of configIcons) {
+      if (!mapIcons.has(icon)) {
+        issues.push({
+          type: "error",
+          message: `Icon "${icon}" is referenced in config but missing from ICON_MAP in Sidebar`,
+        })
+      }
+    }
+  } catch {}
+
+  // d) File-type field check (heuristic)
+  try {
+    const fileColumns: string[] = []
+    for (const m of migrations) {
+      const sql = await readFile(join(projectDir, "backend/migrations", m.file), "utf-8")
+      const tableRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s*\(([\s\S]*?)(?:\);)/gi
+      let tableMatch
+      while ((tableMatch = tableRegex.exec(sql)) !== null) {
+        const body = tableMatch[1]!
+        const lines = body.split(",").map((l) => l.trim())
+        for (const line of lines) {
+          const colMatch = line.match(/^(\w+)\s+TEXT/i)
+          if (colMatch) {
+            const colName = colMatch[1]!
+            if (/document|file|attachment/i.test(colName)) {
+              fileColumns.push(colName)
+            }
+          }
+        }
+      }
+    }
+
+    if (fileColumns.length > 0) {
+      const componentDir = join(projectDir, "frontend/src/domain/components")
+      const entries = await readdir(componentDir)
+      let hasFileUpload = false
+      for (const entry of entries) {
+        const content = await readFile(join(componentDir, entry), "utf-8")
+        if (content.includes("FileUpload")) {
+          hasFileUpload = true
+          break
+        }
+      }
+      if (!hasFileUpload) {
+        for (const col of fileColumns) {
+          issues.push({
+            type: "warning",
+            message: `Column "${col}" looks like a file reference but no component uses FileUpload — use FileUpload instead of text input`,
+          })
+        }
+      }
+    }
+  } catch {}
+
+  return issues
+}
+
 export async function scanArtifactState(projectDir: string): Promise<ArtifactState> {
   const migrations: MigrationInfo[] = []
   try {
@@ -114,7 +236,9 @@ export async function scanArtifactState(projectDir: string): Promise<ArtifactSta
     }))
   } catch {}
 
-  return { migrations, config, pages, gaps }
+  const issues = await detectIssues(projectDir, migrations)
+
+  return { migrations, config, pages, gaps, issues }
 }
 
 export function formatArtifactState(state: ArtifactState): string {
@@ -155,6 +279,15 @@ export function formatArtifactState(state: ArtifactState): string {
     lines.push("### Workflow Gaps")
     for (const g of state.gaps) {
       lines.push(`- [${g.status}] ${g.name} (${g.capabilityTypes.join(", ")})`)
+    }
+    lines.push("")
+  }
+
+  if (state.issues.length > 0) {
+    lines.push("### Issues")
+    for (const issue of state.issues) {
+      const prefix = issue.type === "error" ? "ERROR" : "WARNING"
+      lines.push(`- [${prefix}] ${issue.message}`)
     }
     lines.push("")
   }
