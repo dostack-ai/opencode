@@ -1,8 +1,10 @@
-import { readFile } from "fs/promises"
+import { readFile, stat } from "fs/promises"
 import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 import { scanArtifactState, formatArtifactState, type ArtifactState } from "../artifact-state"
 import type { ApiClient } from "../api-client"
+import type { DostackConfig } from "../config"
+import { getRuntimeErrors } from "../tools/get-runtime-errors"
 
 const CACHE_TTL_MS = 10_000
 const REGISTRY_TTL_MS = 60_000
@@ -46,7 +48,14 @@ Before declaring the build complete, run these checks:
 
 Do not report completion until all checks pass.`
 
-export function createBeforePromptHook(projectDir: string, client?: ApiClient) {
+const RUNTIME_ERRORS_TTL_MS = 30_000
+
+type RuntimeErrorOptions = {
+  config: DostackConfig
+  fetchErrors?: (config: DostackConfig, args: { minutes?: number }) => Promise<string>
+}
+
+export function createBeforePromptHook(projectDir: string, client?: ApiClient, runtimeErrorOptions?: RuntimeErrorOptions) {
   let cachedState: ArtifactState | null = null
   let cacheTimestamp = 0
   let systemPromptCache: string | null = null
@@ -54,6 +63,34 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient) {
   let registryTimestamp = 0
   let verificationPending = false
   let verificationInjected = false
+  let runtimeErrorsCache: string | null = null
+  let runtimeErrorsTimestamp = 0
+
+  async function shouldQueryRuntimeErrors(): Promise<boolean> {
+    try {
+      await stat(join(projectDir, ".dostack/preview-ready"))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function formatRuntimeErrors(resultJson: string): string | null {
+    try {
+      const result = JSON.parse(resultJson)
+      if (!result.errors || result.errors.length === 0) return null
+      const lines: string[] = ["### Recent Runtime Errors"]
+      for (const err of result.errors.slice(0, 10)) {
+        lines.push(`- [${err.timestamp}] **${err.function}**: ${err.message}`)
+      }
+      if (result.truncated || result.errors.length > 10) {
+        lines.push(`- _(${result.errors.length} total errors — showing first 10)_`)
+      }
+      return lines.join("\n")
+    } catch {
+      return null
+    }
+  }
 
   const invalidate = () => {
     cachedState = null
@@ -102,6 +139,26 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient) {
       output.system.push(VERIFICATION_CHECKLIST)
       verificationInjected = true
       verificationPending = false
+    }
+
+    // Inject runtime errors when a deploy signal is present
+    if (runtimeErrorOptions) {
+      const shouldQuery = await shouldQueryRuntimeErrors()
+      if (shouldQuery) {
+        if (!runtimeErrorsCache || now - runtimeErrorsTimestamp > RUNTIME_ERRORS_TTL_MS) {
+          try {
+            const fetcher = runtimeErrorOptions.fetchErrors ?? getRuntimeErrors
+            const result = await fetcher(runtimeErrorOptions.config, { minutes: 15 })
+            runtimeErrorsCache = formatRuntimeErrors(result)
+            runtimeErrorsTimestamp = now
+          } catch {
+            // Silently skip on error
+          }
+        }
+        if (runtimeErrorsCache) {
+          output.system.push(runtimeErrorsCache)
+        }
+      }
     }
   }
 
