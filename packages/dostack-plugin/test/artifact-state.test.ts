@@ -205,6 +205,43 @@ export function DocForm() { return <FileUpload name="document_url" /> }`,
     expect(state.issues.some((i) => i.message.includes("document_url"))).toBe(false)
   })
 
+  test("flags empty workflowId in config.ts wiring", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/config.ts"),
+      `export const config = {
+  workflows: {
+    rfpAnalysis: { workflowId: "", outputMapping: { summary: "rfps.summary" } },
+  },
+  phases: ["intake", "analysis"],
+}`,
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.type === "error" && i.message.includes("rfpAnalysis"))).toBe(true)
+    expect(state.issues.some((i) => i.message.includes("dostack_query_workflows"))).toBe(true)
+  })
+
+  test("does not flag non-empty workflowId", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/config.ts"),
+      `export const config = {
+  workflows: {
+    rfpAnalysis: { workflowId: "wf-abc123", outputMapping: { summary: "rfps.summary" } },
+  },
+  phases: ["intake"],
+}`,
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.issues.some((i) => i.message.includes("rfpAnalysis"))).toBe(false)
+  })
+
   test("formatArtifactState renders Issues section when issues exist", () => {
     const state = {
       migrations: [],

@@ -50,24 +50,36 @@ Backend uses `createClient` from `@dostack/app-sdk/server` in the `dostack_proxy
 
 ## Tool Usage
 
-Use these tools to interact with the DOstack platform:
+### REQUIRED during every build:
+- **dostack_query_workflows** — You MUST call this to discover real workflow IDs before writing config.ts. Search by workflow name or description. Never leave workflowId as empty string — if a workflow is marked as 'matched' in the plan, find its ID and wire it.
 
-- **dostack_query_workflows** — When you need to know what workflows are available for wiring.
-- **dostack_get_workflow_schema** — Before wiring a workflow, get its input/output schema to understand the data it produces.
+### REQUIRED after writing config.ts:
+- **dostack_validate_wiring** — Validate that workflow bindings in config.ts are consistent with the actual workflow schemas and your database columns.
+
+### Use as needed:
+- **dostack_get_workflow_schema** — Before wiring a workflow, get its input/output schema to understand field names and types.
 - **dostack_create_workflow_version** — When a workflow's output schema needs modification to match the workbench's data model.
-- **dostack_validate_wiring** — After editing config or migrations, validate that wiring is consistent.
-- **dostack_flag_workflow_gap** — When a needed workflow doesn't exist yet.
+- **dostack_flag_workflow_gap** — When a needed workflow doesn't exist yet (status: 'gap' in the plan).
 - **dostack_trigger_preview** — After editing frontend files, rebuild to update the live preview.
-- **dostack_get_runtime_errors** — When the deployed app has errors, is returning unexpected results, or after deploying a fix to verify it worked. Shows recent Lambda errors from CloudWatch.
+- **dostack_get_runtime_errors** — When the deployed app has errors or after deploying a fix.
 
-## File Upload Pattern
+## File Upload in Create Forms
 
-For fields that accept file uploads (documents, attachments, images):
-- Use the `FileUpload` component from `@/components/content/FileUpload`
-- FileUpload requires an existing entity ID — it can't be used during entity creation
-- Create forms with file fields must: create entity first → upload file → PATCH entity with s3_key
-- Make file columns nullable in migrations to support this two-step pattern
-- Do NOT use text inputs for file paths or S3 URIs
+When the domain model has file-type fields (documents, attachments, images):
+
+**ALWAYS use a two-step create dialog:**
+1. Step 1: Show entity form fields (name, description, etc.) — NO file input. Submit creates the entity.
+2. Step 2: Same dialog shows `FileUpload` with the new entity ID. User uploads files.
+3. Footer: "Skip for now" (closes) and "Open {Entity}" (navigates to detail).
+
+If the template provides `CreateWithUploadDialog` in `@/components/content/`, use it.
+If not, build the two-step flow in the entity's form component.
+
+**Do NOT:**
+- Navigate away from the dialog for file upload
+- Put file upload only on the detail page
+- Use text inputs for file paths or S3 URIs
+- Make file columns NOT NULL (they must be nullable for the two-step pattern)
 
 ## Workflow Auto-Trigger
 

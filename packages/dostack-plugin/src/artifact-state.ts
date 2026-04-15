@@ -64,7 +64,8 @@ function extractWiring(content: string): { workflows: WiringInfo[]; phases: stri
 
   // Match entries like: name: { workflowId: "...", outputMapping: { ... } }
   // Use a two-step approach: first find workflowId entries, then backtrack to find the key name
-  const wfIdRegex = /(\w+)\s*:\s*\{[^{}]*workflowId\s*:\s*["']([^"']+)["'][^{}]*outputMapping\s*:\s*\{([^{}]*)\}/g
+  // Captures empty workflowId values too (e.g., workflowId: "")
+  const wfIdRegex = /(\w+)\s*:\s*\{[^{}]*workflowId\s*:\s*["']([^"']*)["'][^{}]*outputMapping\s*:\s*\{([^{}]*)\}/g
   let match
   while ((match = wfIdRegex.exec(content)) !== null) {
     const mappingBlock = match[3]!
@@ -87,7 +88,7 @@ function extractWiring(content: string): { workflows: WiringInfo[]; phases: stri
 
 const BASE_TABLES = new Set(["users", "notifications", "activities", "comments", "files", "_migrations"])
 
-async function detectIssues(projectDir: string, migrations: MigrationInfo[]): Promise<Issue[]> {
+async function detectIssues(projectDir: string, migrations: MigrationInfo[], wiring: WiringInfo[]): Promise<Issue[]> {
   const issues: Issue[] = []
 
   // a) Demo file check
@@ -198,6 +199,16 @@ async function detectIssues(projectDir: string, migrations: MigrationInfo[]): Pr
     }
   } catch {}
 
+  // e) Empty workflowId check
+  for (const wf of wiring) {
+    if (!wf.workflowId) {
+      issues.push({
+        type: "error",
+        message: `Workflow "${wf.name}" has empty workflowId — call dostack_query_workflows to find the real ID`,
+      })
+    }
+  }
+
   return issues
 }
 
@@ -236,7 +247,7 @@ export async function scanArtifactState(projectDir: string): Promise<ArtifactSta
     }))
   } catch {}
 
-  const issues = await detectIssues(projectDir, migrations)
+  const issues = await detectIssues(projectDir, migrations, config.workflows)
 
   return { migrations, config, pages, gaps, issues }
 }
