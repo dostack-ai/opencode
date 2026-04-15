@@ -286,4 +286,34 @@ describe("beforePromptHook", () => {
     await hook(input as any, output2)
     expect(output2.system.some((s) => s.includes("Post-Build Verification Required"))).toBe(false)
   })
+
+  test("verification can re-arm after cache invalidation (new build cycle)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-hook-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+
+    const { hook, invalidate, setVerificationPending } = createBeforePromptHook(dir)
+    const input = { model: { modelID: "gemini-2.5-pro", providerID: "google" } } as any
+
+    // First cycle: inject verification
+    setVerificationPending(true)
+    const output1 = { system: [] as string[] }
+    await hook(input, output1)
+    expect(output1.system.some((s) => s.includes("Post-Build Verification Required"))).toBe(true)
+
+    // Second call: no injection (already injected)
+    setVerificationPending(true)
+    const output2 = { system: [] as string[] }
+    await hook(input, output2)
+    expect(output2.system.some((s) => s.includes("Post-Build Verification Required"))).toBe(false)
+
+    // Invalidate (simulates file write after verification)
+    invalidate()
+
+    // New cycle: verification should re-arm
+    setVerificationPending(true)
+    const output3 = { system: [] as string[] }
+    await hook(input, output3)
+    expect(output3.system.some((s) => s.includes("Post-Build Verification Required"))).toBe(true)
+  })
 })

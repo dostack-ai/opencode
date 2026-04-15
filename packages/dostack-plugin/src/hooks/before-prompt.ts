@@ -95,6 +95,7 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient, r
   const invalidate = () => {
     cachedState = null
     cacheTimestamp = 0
+    verificationInjected = false
   }
 
   const setVerificationPending = (pending: boolean) => {
