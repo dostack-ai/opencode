@@ -146,7 +146,7 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient, r
     if (runtimeErrorOptions) {
       const shouldQuery = await shouldQueryRuntimeErrors()
       if (shouldQuery) {
-        if (!runtimeErrorsCache || now - runtimeErrorsTimestamp > RUNTIME_ERRORS_TTL_MS) {
+        if (runtimeErrorsTimestamp === 0 || now - runtimeErrorsTimestamp > RUNTIME_ERRORS_TTL_MS) {
           try {
             const fetcher = runtimeErrorOptions.fetchErrors ?? getRuntimeErrors
             const result = await fetcher(runtimeErrorOptions.config, { minutes: 15 })

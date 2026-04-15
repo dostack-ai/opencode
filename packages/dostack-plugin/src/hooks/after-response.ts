@@ -4,30 +4,13 @@ const FILE_WRITE_TOOLS = new Set(["write", "edit"])
 const FRONTEND_PREFIXES = ["frontend/"]
 const DEBOUNCE_MS = 2_000
 
-const BUILD_COMPLETE_PATTERNS = [
-  /build\s+complete/i,
-  /all\s+tasks?\s+done/i,
-  /all\s+todos?\s+complete/i,
-  /ready\s+to\s+deploy/i,
-  /build\s+passes?\s+cleanly/i,
-]
-
-export function createAfterResponseHook(
-  projectDir: string,
-  invalidateCache: () => void,
-  setVerificationPending: (pending: boolean) => void,
-) {
+export function createAfterResponseHook(projectDir: string, invalidateCache: () => void) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
   return async (
-    input: { tool: string; sessionID: string; callID: string; args: any; response?: string },
+    input: { tool: string; sessionID: string; callID: string; args: any },
     _output: { title: string; output: string; metadata: any },
   ) => {
-    const responseText = input.response ?? _output.output ?? ""
-    if (BUILD_COMPLETE_PATTERNS.some((p) => p.test(responseText))) {
-      setVerificationPending(true)
-    }
-
     if (!FILE_WRITE_TOOLS.has(input.tool)) return
 
     invalidateCache()
@@ -44,6 +27,25 @@ export function createAfterResponseHook(
           // Preview build failure is non-blocking
         }
       }, DEBOUNCE_MS)
+    }
+  }
+}
+
+const BUILD_COMPLETE_PATTERNS = [
+  /\bbuild\b.{0,20}\bcomplete\b/i,
+  /\ball\s+tasks?\s+(?:are\s+)?done\b/i,
+  /\ball\s+todos?\s+(?:are\s+)?complete\b/i,
+  /\bready\s+to\s+deploy\b/i,
+  /\bbuild\s+passes?\s+cleanly\b/i,
+]
+
+export function createTextCompleteHook(setVerificationPending: (pending: boolean) => void) {
+  return async (
+    _input: { sessionID: string; messageID: string; partID: string },
+    output: { text: string },
+  ) => {
+    if (BUILD_COMPLETE_PATTERNS.some((p) => p.test(output.text))) {
+      setVerificationPending(true)
     }
   }
 }

@@ -242,6 +242,90 @@ export function DocForm() { return <FileUpload name="document_url" /> }`,
     expect(state.issues.some((i) => i.message.includes("rfpAnalysis"))).toBe(false)
   })
 
+  test("extracts wiring when inputMapping appears before workflowId", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-issue-"))
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain"), { recursive: true })
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/config.ts"),
+      `export const config = {
+  workflows: {
+    rfpAnalysis: {
+      inputMapping: { rfp_id: "entity.id", content: "entity.body" },
+      workflowId: "wf-abc123",
+      outputMapping: { summary: "rfps.summary" },
+    },
+  },
+  phases: ["intake", "analysis"],
+}`,
+    )
+    const state = await scanArtifactState(dir)
+    expect(state.config.workflows).toHaveLength(1)
+    expect(state.config.workflows[0].name).toBe("rfpAnalysis")
+    expect(state.config.workflows[0].workflowId).toBe("wf-abc123")
+  })
+
+  test("mid-build integration: detects multiple issues simultaneously", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-midbuild-"))
+
+    // Migrations: demo still present + domain migration added
+    await mkdir(join(dir, "backend/migrations"), { recursive: true })
+    await writeFile(
+      join(dir, "backend/migrations/001_demo_items.sql"),
+      "CREATE TABLE items (id UUID PRIMARY KEY, name TEXT);",
+    )
+    await writeFile(
+      join(dir, "backend/migrations/002_rfps.sql"),
+      "CREATE TABLE rfps (id UUID PRIMARY KEY, title TEXT, document_url TEXT);",
+    )
+
+    // Config with empty workflowId + icon reference
+    await mkdir(join(dir, "frontend/src/domain"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/config.ts"),
+      `export const config = {
+  workflows: {
+    rfpAnalysis: { workflowId: "", outputMapping: { summary: "rfps.summary" } },
+  },
+  navigation: [
+    { label: "RFPs", icon: "FileSearch", path: "/rfps" },
+  ],
+  phases: ["intake"],
+}`,
+    )
+
+    // Sidebar with missing icon
+    await mkdir(join(dir, "frontend/src/components/layout"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/components/layout/Sidebar.tsx"),
+      "const ICON_MAP = { Home: HomeIcon, FileText: FileTextIcon }",
+    )
+
+    // Pages created but no FileUpload component
+    await mkdir(join(dir, "frontend/src/domain/pages"), { recursive: true })
+    await writeFile(join(dir, "frontend/src/domain/pages/RfpList.tsx"), "export default function RfpList() {}")
+    await mkdir(join(dir, "frontend/src/domain/components"), { recursive: true })
+    await writeFile(
+      join(dir, "frontend/src/domain/components/RfpForm.tsx"),
+      'export function RfpForm() { return <input type="text" name="doc" /> }',
+    )
+
+    const state = await scanArtifactState(dir)
+    const formatted = formatArtifactState(state)
+
+    // Should detect: demo migration, empty workflowId, missing icon, file-type warning
+    expect(state.issues.some((i) => i.message.includes("001_demo_items.sql"))).toBe(true)
+    expect(state.issues.some((i) => i.message.includes("rfpAnalysis") && i.message.includes("empty workflowId"))).toBe(true)
+    expect(state.issues.some((i) => i.message.includes("FileSearch"))).toBe(true)
+    expect(state.issues.some((i) => i.type === "warning" && i.message.includes("document_url"))).toBe(true)
+
+    // Formatted output should have Issues section with all of them
+    expect(formatted).toContain("### Issues")
+    expect(formatted).toContain("[ERROR]")
+    expect(formatted).toContain("[WARNING]")
+  })
+
   test("formatArtifactState renders Issues section when issues exist", () => {
     const state = {
       migrations: [],

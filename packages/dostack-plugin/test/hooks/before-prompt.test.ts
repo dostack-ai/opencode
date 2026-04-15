@@ -237,6 +237,47 @@ describe("beforePromptHook", () => {
     expect(fetchCount).toBe(1)
   })
 
+  test("caches empty runtime error results (no re-fetch when no errors)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dostack-hook-"))
+
+    await mkdir(join(dir, ".dostack"), { recursive: true })
+    await writeFile(join(dir, ".dostack/preview-ready"), "")
+
+    const mockConfig = {
+      api_url: "https://api.dostack.ai",
+      api_key: "dsk_test_key_123",
+      workbench_id: "wb-test-001",
+      workbench_slug: "test-slug",
+    }
+
+    let fetchCount = 0
+    const mockFetchErrors = async (_config: typeof mockConfig, _args: { minutes?: number }) => {
+      fetchCount++
+      // Returns NO errors
+      return JSON.stringify({
+        slug: "test-slug",
+        errors: [],
+        logGroups: [],
+        timeWindowMinutes: 15,
+        truncated: false,
+      })
+    }
+
+    const { hook } = createBeforePromptHook(dir, undefined, {
+      config: mockConfig,
+      fetchErrors: mockFetchErrors,
+    })
+
+    const input = { model: { modelID: "gemini-2.5-pro", providerID: "google" } }
+
+    await hook(input as any, { system: [] })
+    await hook(input as any, { system: [] })
+    await hook(input as any, { system: [] })
+
+    // Should only fetch once even with no errors — cache TTL applies
+    expect(fetchCount).toBe(1)
+  })
+
   test("does not query runtime errors when no deploy signal exists", async () => {
     const dir = await mkdtemp(join(tmpdir(), "dostack-hook-"))
 

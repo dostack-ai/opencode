@@ -63,9 +63,9 @@ function extractWiring(content: string): { workflows: WiringInfo[]; phases: stri
   const workflows: WiringInfo[] = []
 
   // Match entries like: name: { workflowId: "...", outputMapping: { ... } }
-  // Use a two-step approach: first find workflowId entries, then backtrack to find the key name
+  // Uses (?:[^{}]|\{[^{}]*\})* to skip one level of nested braces (e.g., inputMapping: { ... })
   // Captures empty workflowId values too (e.g., workflowId: "")
-  const wfIdRegex = /(\w+)\s*:\s*\{[^{}]*workflowId\s*:\s*["']([^"']*)["'][^{}]*outputMapping\s*:\s*\{([^{}]*)\}/g
+  const wfIdRegex = /(\w+)\s*:\s*\{(?:[^{}]|\{[^{}]*\})*workflowId\s*:\s*["']([^"']*)["'](?:[^{}]|\{[^{}]*\})*outputMapping\s*:\s*\{([^{}]*)\}/g
   let match
   while ((match = wfIdRegex.exec(content)) !== null) {
     const mappingBlock = match[3]!
@@ -179,7 +179,7 @@ async function detectIssues(projectDir: string, migrations: MigrationInfo[], wir
 
     if (fileColumns.length > 0) {
       const componentDir = join(projectDir, "frontend/src/domain/components")
-      const entries = await readdir(componentDir)
+      const entries = (await readdir(componentDir)).filter((f) => f.endsWith(".tsx") || f.endsWith(".ts"))
       let hasFileUpload = false
       for (const entry of entries) {
         const content = await readFile(join(componentDir, entry), "utf-8")
