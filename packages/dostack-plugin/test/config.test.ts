@@ -34,9 +34,11 @@ describe("parseDostackConfig", () => {
     expect(result.internal_api_token).toBeUndefined()
   })
 
-  test("rejects missing api_url", () => {
+  test("accepts missing api_url (phase1c mode doesn't need it)", () => {
     const { api_url: _, ...noUrl } = validConfig
-    expect(() => parseDostackConfig(noUrl)).toThrow("dostack-plugin: invalid config")
+    const result = parseDostackConfig(noUrl)
+    expect(result.api_url).toBeUndefined()
+    expect(result.workbench_id).toBe(validConfig.workbench_id)
   })
 
   test("rejects api_key without dsk_ prefix", () => {
@@ -55,5 +57,38 @@ describe("parseDostackConfig", () => {
     expect(() =>
       parseDostackConfig({ ...validConfig, api_url: "not-a-url" }),
     ).toThrow("dostack-plugin: invalid config")
+  })
+
+  test("accepts phase1c-only config (no legacy api_url/api_key)", () => {
+    const phase1cConfig = {
+      workbench_id: "wb_abc123",
+      workbench_slug: "rfp-app",
+      coordinator_api_url: "https://composer.dev.dostack.ai",
+      builder_auth_token: "builder-tok-xyz",
+      build_job_id: "job_123",
+      package_s3_bucket: "dostack-app-packages-dev",
+    }
+    const result = parseDostackConfig(phase1cConfig)
+    expect(result.workbench_id).toBe("wb_abc123")
+    expect(result.coordinator_api_url).toBe("https://composer.dev.dostack.ai")
+    expect(result.builder_auth_token).toBe("builder-tok-xyz")
+    expect(result.build_job_id).toBe("job_123")
+    expect(result.package_s3_bucket).toBe("dostack-app-packages-dev")
+    expect(result.api_url).toBeUndefined()
+    expect(result.api_key).toBeUndefined()
+  })
+
+  test("accepts empty-string api_url and api_key (rendered from unset env vars)", () => {
+    const phase1cEmptyLegacy = {
+      api_url: "",
+      api_key: "",
+      workbench_id: "wb_abc123",
+      coordinator_api_url: "https://composer.dev.dostack.ai",
+      builder_auth_token: "builder-tok-xyz",
+      build_job_id: "job_123",
+      package_s3_bucket: "dostack-app-packages-dev",
+    }
+    const result = parseDostackConfig(phase1cEmptyLegacy)
+    expect(result.workbench_id).toBe("wb_abc123")
   })
 })
