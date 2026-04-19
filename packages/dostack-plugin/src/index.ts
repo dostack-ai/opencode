@@ -55,10 +55,10 @@ const dostackPlugin: Plugin = async (input, options) => {
   // Config may pass coordinator_api_url explicitly; fall back to api_url so
   // deployments that haven't split the coordinator API yet still work.
   const buildJobId = config.build_job_id ?? buildRequest?.build_job_id
-  const coordinatorBase = config.coordinator_api_url ?? config.api_url
+  const coordinatorBase = config.coordinator_api_url || config.api_url
   const authToken = config.builder_auth_token
   let eventEmitter: EventEmitter | undefined
-  if (buildJobId && authToken) {
+  if (buildJobId && authToken && coordinatorBase) {
     eventEmitter = createEventEmitter({
       coordinatorBase,
       buildJobId,
@@ -69,7 +69,7 @@ const dostackPlugin: Plugin = async (input, options) => {
     )
   } else {
     console.warn(
-      "[dostack-plugin] builder_auth_token / build_job_id missing — events will not be emitted",
+      "[dostack-plugin] builder_auth_token / build_job_id / coordinator_api_url missing — events will not be emitted",
     )
   }
 
@@ -85,9 +85,9 @@ const dostackPlugin: Plugin = async (input, options) => {
   // coordinator's watchdog will time out and fail the job cleanly.
   const packageS3Bucket = config.package_s3_bucket ?? process.env.PACKAGE_S3_BUCKET
   const buildComplete = async () => {
-    if (!eventEmitter || !buildJobId || !authToken) {
+    if (!eventEmitter || !buildJobId || !authToken || !coordinatorBase) {
       console.warn(
-        "[dostack-plugin] onBuildComplete skipped: event emitter / job id / auth token missing",
+        "[dostack-plugin] onBuildComplete skipped: event emitter / job id / auth token / coordinator base missing",
       )
       return
     }

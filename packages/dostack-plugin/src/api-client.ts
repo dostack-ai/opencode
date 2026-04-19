@@ -75,9 +75,16 @@ function createHttpClient(
 export type ApiClient = ReturnType<typeof createApiClient>
 
 export function createApiClient(config: DostackConfig) {
+  // Legacy platform API is optional in phase1c mode — the plugin only talks
+  // to the coordinator via build events. ensureConfigured() throws lazily if
+  // callers try to hit the external API without api_url/api_key set.
+  const externalHeaders: Record<string, string> = {}
+  if (config.api_key) {
+    externalHeaders["X-Api-Key"] = config.api_key
+  }
   const external = createHttpClient(
     config.api_url,
-    { "X-Api-Key": config.api_key },
+    externalHeaders,
     "external API",
   )
 
