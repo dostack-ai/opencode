@@ -2,6 +2,7 @@ import type { Plugin, PluginModule } from "@opencode-ai/plugin"
 import { parseDostackConfig } from "./config"
 import { createApiClient } from "./api-client"
 import { loadBuildRequest, type BuildRequest } from "./build-request"
+import { createEventEmitter, type EventEmitter } from "./event-emitter"
 import { createQueryWorkflowsTool } from "./tools/query-workflows"
 import { createGetWorkflowSchemaTool } from "./tools/get-workflow-schema"
 import { createCreateWorkflowVersionTool } from "./tools/create-workflow-version"
@@ -11,7 +12,6 @@ import { createTriggerPreviewTool } from "./tools/trigger-preview"
 import { createGetRuntimeErrorsTool } from "./tools/get-runtime-errors"
 import { createBeforePromptHook } from "./hooks/before-prompt"
 import { createAfterResponseHook, createTextCompleteHook } from "./hooks/after-response"
-import { createBuildStatusReporter } from "./build-status"
 
 const dostackPlugin: Plugin = async (input, options) => {
   const config = parseDostackConfig(options ?? {})
@@ -43,13 +43,34 @@ const dostackPlugin: Plugin = async (input, options) => {
     )
   }
 
-  const beforePrompt = createBeforePromptHook(projectDir, client, { config, buildRequest })
-  const buildStatus = createBuildStatusReporter(client, config)
+  // Phase 1c: build events go to the coordinator's /builds/{id}/events route.
+  // Config may pass coordinator_api_url explicitly; fall back to api_url so
+  // deployments that haven't split the coordinator API yet still work.
+  const buildJobId = config.build_job_id ?? buildRequest?.build_job_id
+  let eventEmitter: EventEmitter | undefined
+  if (buildJobId && config.builder_auth_token) {
+    const coordinatorBase = config.coordinator_api_url ?? config.api_url
+    eventEmitter = createEventEmitter({
+      coordinatorBase,
+      buildJobId,
+      authToken: config.builder_auth_token,
+    })
+    console.log(
+      `[dostack-plugin] event emitter armed for build_job_id=${buildJobId} via ${coordinatorBase}`,
+    )
+  } else {
+    console.warn(
+      "[dostack-plugin] builder_auth_token / build_job_id missing — events will not be emitted",
+    )
+  }
 
-  // Combine invalidate with status reset so re-arming also resets build status
+  const beforePrompt = createBeforePromptHook(projectDir, client, { config, buildRequest })
+
+  // Combine invalidate with an event-emitter-driven reset for parity with the
+  // legacy resetStatus() hook. When the user re-asks the model to work, we
+  // re-arm verification state.
   const invalidateAndReset = () => {
     beforePrompt.invalidate()
-    buildStatus.resetStatus()
   }
 
   return {
@@ -63,10 +84,16 @@ const dostackPlugin: Plugin = async (input, options) => {
       dostack_get_runtime_errors: createGetRuntimeErrorsTool(config),
     },
     "experimental.chat.system.transform": beforePrompt.hook,
-    "tool.execute.after": createAfterResponseHook(projectDir, invalidateAndReset, buildStatus.reportBuilding),
+    "tool.execute.after": createAfterResponseHook(projectDir, invalidateAndReset, undefined, eventEmitter),
     "experimental.text.complete": createTextCompleteHook(beforePrompt.setVerificationPending, {
       isVerificationComplete: beforePrompt.isVerificationComplete,
-      reportComplete: buildStatus.reportComplete,
+      // Task 12 installs the real onBuildComplete (package assemble + POST /complete).
+      // For Task 11, only emit a completion-intent event so downstream can observe it.
+      onBuildComplete: eventEmitter
+        ? async () => {
+            await eventEmitter!.emit("builder.step.completed", { step: "generating" })
+          }
+        : undefined,
     }),
   }
 }

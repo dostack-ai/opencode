@@ -8,6 +8,16 @@ export const DostackConfigSchema = z.object({
   template_version: z.string().optional(),
   internal_api_url: z.string().url().optional(),
   internal_api_token: z.string().optional(),
+
+  // Phase 1c — builder contract
+  // The composer coordinator exposes /builds/{id}/events and /builds/{id}/complete
+  // routes; the plugin POSTs builder.* events + the final completion callback
+  // to those. coordinator_api_url defaults to api_url if not explicitly set, so
+  // legacy configs keep working.
+  coordinator_api_url: z.string().url().optional(),
+  builder_auth_token: z.string().optional(),
+  build_job_id: z.string().optional(),
+  package_s3_bucket: z.string().optional(),
 })
 
 export type DostackConfig = z.infer<typeof DostackConfigSchema>
