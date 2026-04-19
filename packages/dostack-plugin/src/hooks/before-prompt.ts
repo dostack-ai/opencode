@@ -4,6 +4,7 @@ import { fileURLToPath } from "url"
 import { scanArtifactState, formatArtifactState, type ArtifactState } from "../artifact-state"
 import type { ApiClient } from "../api-client"
 import type { DostackConfig } from "../config"
+import type { BuildRequest } from "../build-request"
 import { getRuntimeErrors } from "../tools/get-runtime-errors"
 
 const CACHE_TTL_MS = 10_000
@@ -53,6 +54,86 @@ const RUNTIME_ERRORS_TTL_MS = 30_000
 type RuntimeErrorOptions = {
   config: DostackConfig
   fetchErrors?: (config: DostackConfig, args: { minutes?: number }) => Promise<string>
+  buildRequest?: BuildRequest | null
+}
+
+function formatBuildRequest(br: BuildRequest): string {
+  const lines: string[] = ["## Build Request (authoritative spec + workflow bindings)"]
+  lines.push("")
+  lines.push(
+    "This build request was uploaded by the DOstack coordinator before this task started. " +
+      "Use it as the authoritative source of truth for identity, entities, roles, actions, " +
+      "ui_intent, and workflow bindings. Do NOT infer these from chat history.",
+  )
+  lines.push("")
+
+  // Identity + spec summary
+  const spec = br.spec ?? ({} as BuildRequest["spec"])
+  const identity = (spec.identity ?? {}) as { name?: string; slug?: string; description?: string }
+  lines.push("### Identity")
+  lines.push(`- name: ${identity.name ?? "(unset)"}`)
+  lines.push(`- slug: ${identity.slug ?? "(unset)"}`)
+  lines.push(`- description: ${identity.description ?? "(unset)"}`)
+  lines.push(`- spec_version: ${spec.spec_version ?? "(unset)"}`)
+  lines.push(`- template_version: ${br.template_version ?? "(unset)"}`)
+  lines.push(`- build_job_id: ${br.build_job_id}`)
+  lines.push(`- workbench_id: ${br.workbench_id}`)
+  lines.push("")
+
+  // Entities
+  lines.push("### Entities")
+  if (!spec.entities || spec.entities.length === 0) {
+    lines.push("(none)")
+  } else {
+    lines.push("```json")
+    lines.push(JSON.stringify(spec.entities, null, 2))
+    lines.push("```")
+  }
+  lines.push("")
+
+  // Roles
+  lines.push("### Roles")
+  if (!spec.roles || spec.roles.length === 0) {
+    lines.push("(none)")
+  } else {
+    lines.push("```json")
+    lines.push(JSON.stringify(spec.roles, null, 2))
+    lines.push("```")
+  }
+  lines.push("")
+
+  // Actions
+  lines.push("### Actions")
+  if (!spec.actions || spec.actions.length === 0) {
+    lines.push("(none)")
+  } else {
+    lines.push("```json")
+    lines.push(JSON.stringify(spec.actions, null, 2))
+    lines.push("```")
+  }
+  lines.push("")
+
+  // UI intent
+  lines.push("### UI Intent")
+  lines.push("```json")
+  lines.push(JSON.stringify(spec.ui_intent ?? {}, null, 2))
+  lines.push("```")
+  lines.push("")
+
+  // Workflow bindings (one per action with type=workflow)
+  lines.push("### Workflow Bindings")
+  if (!br.workflow_bindings || br.workflow_bindings.length === 0) {
+    lines.push("(no workflow bindings — this app has no workflow-backed actions)")
+  } else {
+    for (const binding of br.workflow_bindings) {
+      lines.push(`#### ${binding.name} (${binding.workflow_id} @ ${binding.version_id})`)
+      lines.push("```json")
+      lines.push(JSON.stringify(binding, null, 2))
+      lines.push("```")
+      lines.push("")
+    }
+  }
+  return lines.join("\n")
 }
 
 export function createBeforePromptHook(projectDir: string, client?: ApiClient, runtimeErrorOptions?: RuntimeErrorOptions) {
@@ -112,6 +193,13 @@ export function createBeforePromptHook(projectDir: string, client?: ApiClient, r
       systemPromptCache = await loadSystemPrompt()
     }
     output.system.push(systemPromptCache)
+
+    // Phase 1c: inject the authoritative build request (spec + workflow bindings)
+    // so Claude sees the structured intent directly rather than reconstructing it
+    // from conversation history.
+    if (runtimeErrorOptions?.buildRequest) {
+      output.system.push(formatBuildRequest(runtimeErrorOptions.buildRequest))
+    }
 
     const now = Date.now()
     if (!cachedState || now - cacheTimestamp > CACHE_TTL_MS) {
