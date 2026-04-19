@@ -3,6 +3,7 @@ import { parseDostackConfig } from "./config"
 import { createApiClient } from "./api-client"
 import { loadBuildRequest, type BuildRequest } from "./build-request"
 import { createEventEmitter, type EventEmitter } from "./event-emitter"
+import { assembleAndUploadPackage, postComplete } from "./package-assembler"
 import { createQueryWorkflowsTool } from "./tools/query-workflows"
 import { createGetWorkflowSchemaTool } from "./tools/get-workflow-schema"
 import { createCreateWorkflowVersionTool } from "./tools/create-workflow-version"
@@ -12,6 +13,13 @@ import { createTriggerPreviewTool } from "./tools/trigger-preview"
 import { createGetRuntimeErrorsTool } from "./tools/get-runtime-errors"
 import { createBeforePromptHook } from "./hooks/before-prompt"
 import { createAfterResponseHook, createTextCompleteHook } from "./hooks/after-response"
+import { join } from "node:path"
+
+// The app-template Vite build outputs to frontend/dist. This is the path
+// inside the Fargate task workspace that the plugin inspects when packaging.
+// If the template ever moves this path, we must update this constant in
+// lockstep — the coordinator's /complete handler does NOT infer it.
+const FRONTEND_BUNDLE_REL = "frontend/dist"
 
 const dostackPlugin: Plugin = async (input, options) => {
   const config = parseDostackConfig(options ?? {})
@@ -47,13 +55,14 @@ const dostackPlugin: Plugin = async (input, options) => {
   // Config may pass coordinator_api_url explicitly; fall back to api_url so
   // deployments that haven't split the coordinator API yet still work.
   const buildJobId = config.build_job_id ?? buildRequest?.build_job_id
+  const coordinatorBase = config.coordinator_api_url ?? config.api_url
+  const authToken = config.builder_auth_token
   let eventEmitter: EventEmitter | undefined
-  if (buildJobId && config.builder_auth_token) {
-    const coordinatorBase = config.coordinator_api_url ?? config.api_url
+  if (buildJobId && authToken) {
     eventEmitter = createEventEmitter({
       coordinatorBase,
       buildJobId,
-      authToken: config.builder_auth_token,
+      authToken,
     })
     console.log(
       `[dostack-plugin] event emitter armed for build_job_id=${buildJobId} via ${coordinatorBase}`,
@@ -66,11 +75,60 @@ const dostackPlugin: Plugin = async (input, options) => {
 
   const beforePrompt = createBeforePromptHook(projectDir, client, { config, buildRequest })
 
-  // Combine invalidate with an event-emitter-driven reset for parity with the
-  // legacy resetStatus() hook. When the user re-asks the model to work, we
-  // re-arm verification state.
   const invalidateAndReset = () => {
     beforePrompt.invalidate()
+  }
+
+  // Phase 1c onBuildComplete: assemble the package, upload to S3, and POST
+  // /complete so the coordinator flips the workbench to "ready". Any error
+  // in this flow emits builder.log.error and does NOT call /complete — the
+  // coordinator's watchdog will time out and fail the job cleanly.
+  const packageS3Bucket = config.package_s3_bucket ?? process.env.PACKAGE_S3_BUCKET
+  const buildComplete = async () => {
+    if (!eventEmitter || !buildJobId || !authToken) {
+      console.warn(
+        "[dostack-plugin] onBuildComplete skipped: event emitter / job id / auth token missing",
+      )
+      return
+    }
+    if (!packageS3Bucket) {
+      await eventEmitter.emit("builder.log.error", {
+        code: "missing_package_s3_bucket",
+        message: "package_s3_bucket not configured on plugin",
+      })
+      return
+    }
+    if (!buildRequest) {
+      await eventEmitter.emit("builder.log.error", {
+        code: "missing_build_request",
+        message: "cannot assemble package without loaded build request",
+      })
+      return
+    }
+    try {
+      const bundleDir = join(projectDir, FRONTEND_BUNDLE_REL)
+      const assembled = await assembleAndUploadPackage({
+        workbenchId: buildRequest.workbench_id,
+        specVersion: buildRequest.spec.spec_version,
+        bundleDir,
+        packageS3Bucket,
+        spec: buildRequest.spec as unknown as Record<string, unknown>,
+      })
+      await eventEmitter.emit("builder.package.uploaded", {
+        package_version: assembled.packageVersion,
+        file_count: assembled.fileCount,
+      })
+      await postComplete(coordinatorBase, buildJobId, authToken, assembled.s3Prefix)
+      await eventEmitter.emit("builder.build.completed", {
+        package_version: assembled.packageVersion,
+      })
+    } catch (err) {
+      console.error("[dostack-plugin] onBuildComplete failed:", err)
+      await eventEmitter.emit("builder.log.error", {
+        code: "complete_flow_failed",
+        message: String((err as Error)?.message ?? err),
+      })
+    }
   }
 
   return {
@@ -87,13 +145,7 @@ const dostackPlugin: Plugin = async (input, options) => {
     "tool.execute.after": createAfterResponseHook(projectDir, invalidateAndReset, undefined, eventEmitter),
     "experimental.text.complete": createTextCompleteHook(beforePrompt.setVerificationPending, {
       isVerificationComplete: beforePrompt.isVerificationComplete,
-      // Task 12 installs the real onBuildComplete (package assemble + POST /complete).
-      // For Task 11, only emit a completion-intent event so downstream can observe it.
-      onBuildComplete: eventEmitter
-        ? async () => {
-            await eventEmitter!.emit("builder.step.completed", { step: "generating" })
-          }
-        : undefined,
+      onBuildComplete: eventEmitter ? buildComplete : undefined,
     }),
   }
 }
