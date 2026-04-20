@@ -41,8 +41,15 @@ export interface BuildRequest {
 export async function loadBuildRequest(s3Uri: string): Promise<BuildRequest> {
   if (!s3Uri) throw new Error("BUILD_REQUEST_S3_URI is empty")
 
+  // Prefer BUILD_REQUEST_LOCAL_PATH — Fargate entrypoint pre-downloads the
+  // JSON because Bun's plugin-load context can't resolve @aws-sdk/client-s3
+  // (import returns empty namespace).
+  const localPath = process.env.BUILD_REQUEST_LOCAL_PATH
   let body: string
-  if (s3Uri.startsWith("s3://")) {
+  if (localPath) {
+    const { readFile } = await import("node:fs/promises")
+    body = await readFile(localPath, "utf-8")
+  } else if (s3Uri.startsWith("s3://")) {
     body = await fetchFromS3(s3Uri)
   } else if (s3Uri.startsWith("https://")) {
     const res = await fetch(s3Uri)
@@ -63,8 +70,18 @@ export async function loadBuildRequest(s3Uri: string): Promise<BuildRequest> {
 }
 
 async function fetchFromS3(s3Uri: string): Promise<string> {
-  // Lazy import so plugin can load without aws-sdk in environments that don't need it.
-  const { S3Client, GetObjectCommand } = await import("@aws-sdk/client-s3")
+  // Bun's plugin-load context can't resolve a bare specifier like
+  // "@aws-sdk/client-s3" — `await import("@aws-sdk/client-s3")` returns an
+  // empty namespace object. Loading by absolute path hits the same module
+  // graph and works. The path follows Bun's flat node_modules layout at
+  // the OpenCode workspace root.
+  const AWS_SDK_S3_PATH = "/opt/opencode/node_modules/@aws-sdk/client-s3/dist-cjs/index.js"
+  const mod: any = await import(AWS_SDK_S3_PATH)
+  const S3Client = mod.S3Client ?? mod.default?.S3Client
+  const GetObjectCommand = mod.GetObjectCommand ?? mod.default?.GetObjectCommand
+  if (!S3Client || !GetObjectCommand) {
+    throw new Error("aws-sdk client-s3 exports missing — got keys: " + Object.keys(mod).join(","))
+  }
   const match = s3Uri.match(/^s3:\/\/([^/]+)\/(.+)$/)
   if (!match) throw new Error(`malformed s3:// URI: ${s3Uri}`)
   const [, bucket, key] = match
@@ -75,7 +92,6 @@ async function fetchFromS3(s3Uri: string): Promise<string> {
   // @ts-ignore — Node.js stream → string
   return await resp.Body.transformToString()
 }
-
 export function validateBuildRequest(obj: unknown): asserts obj is BuildRequest {
   const o = obj as Record<string, unknown>
   if (!o || typeof o !== "object") throw new Error("build request must be an object")
