@@ -11,6 +11,7 @@ import { createValidateWiringTool } from "./tools/validate-wiring"
 import { createFlagWorkflowGapTool } from "./tools/flag-workflow-gap"
 import { createTriggerPreviewTool } from "./tools/trigger-preview"
 import { createGetRuntimeErrorsTool } from "./tools/get-runtime-errors"
+import { createBuildCompleteTool } from "./tools/build-complete"
 import { createBeforePromptHook } from "./hooks/before-prompt"
 import { createAfterResponseHook, createTextCompleteHook } from "./hooks/after-response"
 import { join } from "node:path"
@@ -83,8 +84,26 @@ const dostackPlugin: Plugin = async (input, options) => {
   // /complete so the coordinator flips the workbench to "ready". Any error
   // in this flow emits builder.log.error and does NOT call /complete — the
   // coordinator's watchdog will time out and fail the job cleanly.
+  //
+  // Phase 1c Task 0A v2: completion can be triggered by either the
+  // experimental.text.complete hook (regex / silence timeout) OR by the
+  // LLM calling dostack_build_complete explicitly. The idempotency flag
+  // below is shared between both paths so whichever fires first wins;
+  // subsequent fires are no-ops. See docs/superpowers/plans/
+  // 2026-04-14-opencode-runtime-errors-tool.md and
+  // packages/dostack-plugin/src/tools/build-complete.ts for context.
   const packageS3Bucket = config.package_s3_bucket ?? process.env.PACKAGE_S3_BUCKET
-  const buildComplete = async () => {
+  let completionInvoked = false
+  const isCompletionInvoked = () => completionInvoked
+  const setCompletionInvoked = (v: boolean) => {
+    completionInvoked = v
+  }
+
+  // buildCompleteInternal: the raw package-upload + /complete flow, with
+  // no idempotency guard. Callers are responsible for ensuring this runs
+  // at most once per session. Exposed to the dostack_build_complete tool
+  // so it can set the flag itself before invoking.
+  const buildCompleteInternal = async () => {
     if (!eventEmitter || !buildJobId || !authToken || !coordinatorBase) {
       console.warn(
         "[dostack-plugin] onBuildComplete skipped: event emitter / job id / auth token / coordinator base missing",
@@ -131,6 +150,20 @@ const dostackPlugin: Plugin = async (input, options) => {
     }
   }
 
+  // buildComplete: guarded wrapper used by the textComplete hook path.
+  // Short-circuits if completion was already dispatched by the tool call.
+  const buildComplete = async () => {
+    if (completionInvoked) {
+      console.info(
+        "[dostack-plugin] textComplete-triggered buildComplete short-circuited " +
+          "— dostack_build_complete tool already fired.",
+      )
+      return
+    }
+    completionInvoked = true
+    await buildCompleteInternal()
+  }
+
   return {
     tool: {
       dostack_query_workflows: createQueryWorkflowsTool(client),
@@ -140,6 +173,12 @@ const dostackPlugin: Plugin = async (input, options) => {
       dostack_flag_workflow_gap: createFlagWorkflowGapTool(projectDir),
       dostack_trigger_preview: createTriggerPreviewTool(projectDir),
       dostack_get_runtime_errors: createGetRuntimeErrorsTool(config),
+      dostack_build_complete: createBuildCompleteTool({
+        projectDir,
+        isCompletionInvoked,
+        setCompletionInvoked,
+        runBuildComplete: buildCompleteInternal,
+      }),
     },
     "experimental.chat.system.transform": beforePrompt.hook,
     "tool.execute.after": createAfterResponseHook(projectDir, invalidateAndReset, undefined, eventEmitter),

@@ -126,9 +126,7 @@ Every change you make should be to one or more of these artifacts. The template 
 
 ## Completion signal
 
-When you have generated all files and the build is fully complete,
-reply with exactly the line:
-
-BUILD_COMPLETE.
-
-Do not explain further. The marker is the signal that your work is done.
+When you have finished generating the entire app and every file is
+written to /workspace/template, call the dostack_build_complete tool
+exactly once with a one-sentence summary. This is the final action
+you take — do not continue editing or replying after calling it.
