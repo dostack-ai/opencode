@@ -123,3 +123,12 @@ You generate and maintain three artifacts:
 3. **UI views** — React page components per lifecycle phase, plus domain-specific components.
 
 Every change you make should be to one or more of these artifacts. The template handles everything else.
+
+## Completion signal
+
+When you have generated all files and the build is fully complete,
+reply with exactly the line:
+
+BUILD_COMPLETE.
+
+Do not explain further. The marker is the signal that your work is done.
