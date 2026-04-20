@@ -132,6 +132,11 @@ const dostackPlugin: Plugin = async (input, options) => {
         bundleDir,
         packageS3Bucket,
         spec: buildRequest.spec as unknown as Record<string, unknown>,
+        // Phase 1e Option B: package-assembler uploads via coordinator
+        // presigned URLs (no AWS SDK in the plugin upload path).
+        coordinatorBase,
+        buildJobId,
+        authToken,
       })
       await eventEmitter.emit("builder.package.uploaded", {
         package_version: assembled.packageVersion,

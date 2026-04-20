@@ -3,13 +3,25 @@
  *
  * When the build completes, walks the generated frontend bundle
  * directory, computes SHA-256 checksums, assembles the manifest.json
- * per the workbench-package RFC, uploads manifest + bundle to S3, and
- * triggers the coordinator's /complete callback.
+ * per the workbench-package RFC, and uploads manifest + bundle + spec
+ * via presigned PUT URLs minted by the coordinator.
+ *
+ * Phase 1e Option B: the upload path no longer uses @aws-sdk/client-s3.
+ * Bun's plugin-load context returns an empty namespace for the SDK
+ * module (confirmed for dynamic bare-specifier, absolute-path, and
+ * static top-level forms), so `new S3Client(...)` blows up with
+ * "undefined is not a constructor". Instead, the plugin POSTs a list
+ * of {rel_path, content_type} to the coordinator's /presign-upload
+ * route, gets back presigned https PUT URLs, and uploads via plain
+ * fetch(). Zero AWS SDK usage in this module.
+ *
+ * Read path (build-request.ts) is unchanged — entrypoint.sh's
+ * BUILD_REQUEST_LOCAL_PATH prefetch is still the primary; see that
+ * file for the dead-code fallback note.
  */
 import { createHash } from "node:crypto"
 import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3"
 
 export interface PackageAssemblyOpts {
   workbenchId: string
@@ -18,6 +30,9 @@ export interface PackageAssemblyOpts {
   packageS3Bucket: string
   packageVersion?: string // auto-generated if not provided
   spec: Record<string, unknown>
+  coordinatorBase: string // e.g. https://composer.example.com — used for /builds/{id}/presign-upload
+  buildJobId: string
+  authToken: string // builder auth token; same token used by /complete + /events
 }
 
 export interface AssembledPackage {
@@ -27,43 +42,61 @@ export interface AssembledPackage {
   fileCount: number
 }
 
+interface PresignResponse {
+  bundle_urls: Record<string, string>
+  manifest_url?: string
+  spec_url?: string
+  expiry_iso: string
+}
+
 export async function assembleAndUploadPackage(
   opts: PackageAssemblyOpts,
 ): Promise<AssembledPackage> {
   const packageVersion = opts.packageVersion ?? `pkg-${Date.now().toString(36)}`
   const s3Prefix = `s3://${opts.packageS3Bucket}/${opts.workbenchId}/${packageVersion}/`
 
-  const s3 = new S3Client({ region: process.env.AWS_REGION || "us-east-1" })
-
-  // 1. Walk bundle dir, compute file list + checksum
+  // 1. Walk bundle dir, compute file list + checksum.
   const files = await walkFiles(opts.bundleDir)
   const bundleChecksum = await checksumBundle(opts.bundleDir, files)
 
-  // 2. Upload every file in the bundle to s3://bucket/wb/pkg/bundle/<rel_path>
+  // 2. Ask the coordinator for presigned PUT URLs — one per bundle file,
+  //    plus manifest_url + spec_url. 30-min TTL; minted on demand so the
+  //    build loop itself doesn't have to carry AWS credentials.
+  const presign = await fetchPresignedUrls({
+    coordinatorBase: opts.coordinatorBase,
+    buildJobId: opts.buildJobId,
+    authToken: opts.authToken,
+    files: files.map((rel) => ({
+      rel_path: rel,
+      content_type: inferContentType(rel),
+    })),
+    wantManifest: true,
+    wantSpec: true,
+  })
+
+  // 3. PUT every bundle file to its presigned URL via plain fetch().
   for (const rel of files) {
+    const url = presign.bundle_urls[rel]
+    if (!url) {
+      throw new Error(`coordinator did not mint a presigned URL for ${rel}`)
+    }
     const abs = join(opts.bundleDir, rel)
     const body = await readFile(abs)
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: opts.packageS3Bucket,
-        Key: `${opts.workbenchId}/${packageVersion}/bundle/${rel}`,
-        Body: body,
-        ContentType: inferContentType(rel),
-      }),
-    )
+    await putToPresignedUrl(url, body, inferContentType(rel), rel)
   }
 
-  // 3. Upload spec.json
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: opts.packageS3Bucket,
-      Key: `${opts.workbenchId}/${packageVersion}/spec.json`,
-      Body: JSON.stringify(opts.spec, null, 2),
-      ContentType: "application/json",
-    }),
+  // 4. PUT spec.json.
+  if (!presign.spec_url) {
+    throw new Error("coordinator did not mint a spec_url; cannot upload spec.json")
+  }
+  await putToPresignedUrl(
+    presign.spec_url,
+    JSON.stringify(opts.spec, null, 2),
+    "application/json",
+    "spec.json",
   )
 
-  // 4. Build + upload manifest
+  // 5. Build + PUT manifest.json.
   const manifest = {
     package_version: packageVersion,
     workbench_id: opts.workbenchId,
@@ -73,16 +106,82 @@ export async function assembleAndUploadPackage(
     file_count: files.length,
     created_at: new Date().toISOString(),
   }
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: opts.packageS3Bucket,
-      Key: `${opts.workbenchId}/${packageVersion}/manifest.json`,
-      Body: JSON.stringify(manifest, null, 2),
-      ContentType: "application/json",
-    }),
+  if (!presign.manifest_url) {
+    throw new Error("coordinator did not mint a manifest_url; cannot upload manifest.json")
+  }
+  await putToPresignedUrl(
+    presign.manifest_url,
+    JSON.stringify(manifest, null, 2),
+    "application/json",
+    "manifest.json",
   )
 
   return { packageVersion, s3Prefix, manifest, fileCount: files.length }
+}
+
+/**
+ * POST /builds/{job_id}/presign-upload on the coordinator HTTP API.
+ *
+ * Returns the full response body on success; throws on non-2xx. The
+ * coordinator route is Auth: NONE at the API Gateway layer and does its
+ * own Bearer-token check against the BuildJob row's builder_auth_token.
+ */
+export async function fetchPresignedUrls(args: {
+  coordinatorBase: string
+  buildJobId: string
+  authToken: string
+  files: Array<{ rel_path: string; content_type: string }>
+  wantManifest?: boolean
+  wantSpec?: boolean
+}): Promise<PresignResponse> {
+  const url = `${args.coordinatorBase.replace(/\/$/, "")}/builds/${args.buildJobId}/presign-upload`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${args.authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      files: args.files,
+      manifest: args.wantManifest ?? false,
+      spec: args.wantSpec ?? false,
+    }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`coordinator /presign-upload failed: ${res.status} ${text}`)
+  }
+  const body = (await res.json()) as PresignResponse
+  if (!body || typeof body !== "object" || !body.bundle_urls) {
+    throw new Error("coordinator /presign-upload response missing bundle_urls")
+  }
+  return body
+}
+
+/**
+ * PUT a body to a presigned URL. The URL already carries the SigV4 (or
+ * legacy presign) signature that S3 requires; the caller just needs the
+ * right Content-Type (which must match what the coordinator passed into
+ * generate_presigned_url, because S3 includes Content-Type in the
+ * signed request).
+ */
+export async function putToPresignedUrl(
+  url: string,
+  body: Buffer | string,
+  contentType: string,
+  labelForError: string,
+): Promise<void> {
+  const res = await fetch(url, {
+    method: "PUT",
+    body: body as any,
+    headers: { "Content-Type": contentType },
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => "<no body>")
+    throw new Error(
+      `presigned PUT for ${labelForError} failed: ${res.status} ${text}`,
+    )
+  }
 }
 
 export async function walkFiles(root: string, sub: string = ""): Promise<string[]> {
