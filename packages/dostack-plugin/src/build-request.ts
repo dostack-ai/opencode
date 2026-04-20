@@ -10,8 +10,6 @@
  * them from chat history.
  */
 
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3"
-
 export interface BuildRequest {
   spec: {
     spec_version: number
@@ -36,33 +34,30 @@ export interface BuildRequest {
 }
 
 /**
- * Fetch the build request JSON from S3 (uses the container's IAM role —
- * no credentials in code). Falls back to plain HTTPS fetch when the URI
- * is an https:// URL, which is useful for tests and local dev.
+ * Load the build request JSON.
+ *
+ * The entrypoint script pre-downloads the build_request.json to disk
+ * and exports BUILD_REQUEST_LOCAL_PATH because @aws-sdk/client-s3 does
+ * not load inside Bun's plugin-load context — bare-specifier, absolute-
+ * path, and static-top-level imports all resolve to an empty namespace.
+ * An https:// URI is also accepted for local/test runs where the JSON
+ * is exposed via a presigned URL.
  */
 export async function loadBuildRequest(s3Uri: string): Promise<BuildRequest> {
-  if (!s3Uri) throw new Error("BUILD_REQUEST_S3_URI is empty")
-
-  // BUILD_REQUEST_LOCAL_PATH is a holdover from when dynamic `await
-  // import("@aws-sdk/client-s3")` returned an empty namespace in the
-  // plugin-load context. Static top-level imports work fine (mirroring
-  // packages/opencode/src/provider/provider.ts's use of
-  // @aws-sdk/credential-providers), so the S3 path below is now the
-  // primary code path. Local-path branch retained for tests + a safety
-  // net until the entrypoint prefetch hack is removed.
   const localPath = process.env.BUILD_REQUEST_LOCAL_PATH
   let body: string
   if (localPath) {
     const { readFile } = await import("node:fs/promises")
     body = await readFile(localPath, "utf-8")
-  } else if (s3Uri.startsWith("s3://")) {
-    body = await fetchFromS3(s3Uri)
-  } else if (s3Uri.startsWith("https://")) {
+  } else if (s3Uri && s3Uri.startsWith("https://")) {
     const res = await fetch(s3Uri)
     if (!res.ok) throw new Error(`build request fetch failed: ${res.status}`)
     body = await res.text()
   } else {
-    throw new Error(`unsupported BUILD_REQUEST_S3_URI scheme: ${s3Uri}`)
+    throw new Error(
+      "build request not available: BUILD_REQUEST_LOCAL_PATH must be set " +
+        "by the entrypoint, or BUILD_REQUEST_S3_URI must be an https:// URL",
+    )
   }
 
   let parsed: unknown
@@ -73,18 +68,6 @@ export async function loadBuildRequest(s3Uri: string): Promise<BuildRequest> {
   }
   validateBuildRequest(parsed)
   return parsed as BuildRequest
-}
-
-async function fetchFromS3(s3Uri: string): Promise<string> {
-  const match = s3Uri.match(/^s3:\/\/([^/]+)\/(.+)$/)
-  if (!match) throw new Error(`malformed s3:// URI: ${s3Uri}`)
-  const [, bucket, key] = match
-  const region = process.env.AWS_REGION || "us-east-1"
-  const client = new S3Client({ region })
-  const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
-  if (!resp.Body) throw new Error("s3 response body missing")
-  // @ts-ignore — Node.js stream → string
-  return await resp.Body.transformToString()
 }
 export function validateBuildRequest(obj: unknown): asserts obj is BuildRequest {
   const o = obj as Record<string, unknown>
