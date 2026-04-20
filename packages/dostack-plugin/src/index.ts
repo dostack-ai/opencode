@@ -129,6 +129,12 @@ const dostackPlugin: Plugin = async (input, options) => {
       const assembled = await assembleAndUploadPackage({
         workbenchId: buildRequest.workbench_id,
         specVersion: buildRequest.spec.spec_version,
+        // Coordinator mints package_version in start_builder and embeds
+        // it in build_request.json. Plugin MUST use this value so its
+        // presigned-URL uploads + /complete payload match the key prefix
+        // the coordinator expects (otherwise /complete reads the manifest
+        // from the wrong prefix and fails with NoSuchKey).
+        packageVersion: buildRequest.package_version,
         bundleDir,
         packageS3Bucket,
         spec: buildRequest.spec as unknown as Record<string, unknown>,

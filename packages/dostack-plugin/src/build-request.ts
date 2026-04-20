@@ -31,6 +31,7 @@ export interface BuildRequest {
   template_version: string
   build_job_id: string
   workbench_id: string
+  package_version: string
 }
 
 /**
@@ -77,4 +78,5 @@ export function validateBuildRequest(obj: unknown): asserts obj is BuildRequest 
     throw new Error("build request missing workflow_bindings[]")
   if (typeof o.build_job_id !== "string") throw new Error("build request missing build_job_id")
   if (typeof o.workbench_id !== "string") throw new Error("build request missing workbench_id")
+  if (typeof o.package_version !== "string") throw new Error("build request missing package_version")
 }
