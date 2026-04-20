@@ -10,6 +10,8 @@
  * them from chat history.
  */
 
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3"
+
 export interface BuildRequest {
   spec: {
     spec_version: number
@@ -41,9 +43,13 @@ export interface BuildRequest {
 export async function loadBuildRequest(s3Uri: string): Promise<BuildRequest> {
   if (!s3Uri) throw new Error("BUILD_REQUEST_S3_URI is empty")
 
-  // Prefer BUILD_REQUEST_LOCAL_PATH — Fargate entrypoint pre-downloads the
-  // JSON because Bun's plugin-load context can't resolve @aws-sdk/client-s3
-  // (import returns empty namespace).
+  // BUILD_REQUEST_LOCAL_PATH is a holdover from when dynamic `await
+  // import("@aws-sdk/client-s3")` returned an empty namespace in the
+  // plugin-load context. Static top-level imports work fine (mirroring
+  // packages/opencode/src/provider/provider.ts's use of
+  // @aws-sdk/credential-providers), so the S3 path below is now the
+  // primary code path. Local-path branch retained for tests + a safety
+  // net until the entrypoint prefetch hack is removed.
   const localPath = process.env.BUILD_REQUEST_LOCAL_PATH
   let body: string
   if (localPath) {
@@ -70,18 +76,6 @@ export async function loadBuildRequest(s3Uri: string): Promise<BuildRequest> {
 }
 
 async function fetchFromS3(s3Uri: string): Promise<string> {
-  // Bun's plugin-load context can't resolve a bare specifier like
-  // "@aws-sdk/client-s3" — `await import("@aws-sdk/client-s3")` returns an
-  // empty namespace object. Loading by absolute path hits the same module
-  // graph and works. The path follows Bun's flat node_modules layout at
-  // the OpenCode workspace root.
-  const AWS_SDK_S3_PATH = "/opt/opencode/node_modules/@aws-sdk/client-s3/dist-cjs/index.js"
-  const mod: any = await import(AWS_SDK_S3_PATH)
-  const S3Client = mod.S3Client ?? mod.default?.S3Client
-  const GetObjectCommand = mod.GetObjectCommand ?? mod.default?.GetObjectCommand
-  if (!S3Client || !GetObjectCommand) {
-    throw new Error("aws-sdk client-s3 exports missing — got keys: " + Object.keys(mod).join(","))
-  }
   const match = s3Uri.match(/^s3:\/\/([^/]+)\/(.+)$/)
   if (!match) throw new Error(`malformed s3:// URI: ${s3Uri}`)
   const [, bucket, key] = match

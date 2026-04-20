@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto"
 import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3"
 
 export interface PackageAssemblyOpts {
   workbenchId: string
@@ -32,17 +33,6 @@ export async function assembleAndUploadPackage(
   const packageVersion = opts.packageVersion ?? `pkg-${Date.now().toString(36)}`
   const s3Prefix = `s3://${opts.packageS3Bucket}/${opts.workbenchId}/${packageVersion}/`
 
-  // Bun's plugin-load context can't resolve a bare specifier like
-  // "@aws-sdk/client-s3" — `await import("@aws-sdk/client-s3")` returns an
-  // empty namespace object. Loading by absolute path hits the same module
-  // graph and works. Mirrors the pattern in build-request.ts:fetchFromS3.
-  const AWS_SDK_S3_PATH = "/opt/opencode/node_modules/@aws-sdk/client-s3/dist-cjs/index.js"
-  const mod: any = await import(AWS_SDK_S3_PATH)
-  const S3Client = mod.S3Client ?? mod.default?.S3Client
-  const PutObjectCommand = mod.PutObjectCommand ?? mod.default?.PutObjectCommand
-  if (!S3Client || !PutObjectCommand) {
-    throw new Error("aws-sdk client-s3 exports missing — got keys: " + Object.keys(mod).join(","))
-  }
   const s3 = new S3Client({ region: process.env.AWS_REGION || "us-east-1" })
 
   // 1. Walk bundle dir, compute file list + checksum
