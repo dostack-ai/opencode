@@ -12,12 +12,20 @@
 
 export interface BuildRequest {
   spec: {
-    spec_version: number
-    identity: { name: string; slug: string; description: string }
+    // Phase 1g canonical WorkbenchSpec shape: spec_version lives in meta.
+    // Pre-Phase-1g build requests had spec_version at the top level; the
+    // field stays here as optional for backward compat but new requests
+    // use meta.spec_version as authoritative.
+    meta?: { spec_version: number; completeness?: number; last_updated?: string }
+    spec_version?: number
+    identity: { name: string; slug?: string; description: string; domain_hint?: string }
     entities: Array<Record<string, unknown>>
     roles: Array<Record<string, unknown>>
     actions: Array<Record<string, unknown>>
-    ui_intent: Record<string, unknown>
+    workflows?: Array<Record<string, unknown>>
+    open_questions?: Array<Record<string, unknown>>
+    screens?: Array<Record<string, unknown>>
+    ui_intent?: Record<string, unknown>
   }
   workflow_bindings: Array<{
     workflow_id: string

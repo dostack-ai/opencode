@@ -128,7 +128,13 @@ const dostackPlugin: Plugin = async (input, options) => {
       const bundleDir = join(projectDir, FRONTEND_BUNDLE_REL)
       const assembled = await assembleAndUploadPackage({
         workbenchId: buildRequest.workbench_id,
-        specVersion: buildRequest.spec.spec_version,
+        // Phase 1g canonical shape nests spec_version in meta; pre-Phase-1g
+        // build requests had it at the top. Fall back to 1 as a last resort
+        // so the manifest is always valid (MANIFEST_INVALID bounces the build).
+        specVersion:
+          buildRequest.spec.meta?.spec_version ??
+          buildRequest.spec.spec_version ??
+          1,
         // Coordinator mints package_version in start_builder and embeds
         // it in build_request.json. Plugin MUST use this value so its
         // presigned-URL uploads + /complete payload match the key prefix
