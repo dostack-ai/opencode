@@ -14,7 +14,37 @@ import { createGetRuntimeErrorsTool } from "./tools/get-runtime-errors"
 import { createBuildCompleteTool } from "./tools/build-complete"
 import { createBeforePromptHook } from "./hooks/before-prompt"
 import { createAfterResponseHook, createTextCompleteHook } from "./hooks/after-response"
+import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
+
+/**
+ * Write every VITE_* process env var into `<projectDir>/frontend/.env.local`
+ * before any build runs. Vite's loadEnv reads .env.local automatically; it
+ * does NOT read process.env directly (even VITE_-prefixed ones). Without
+ * this, the generated app ships with import.meta.env.VITE_API_URL ===
+ * undefined (and friends), which breaks the nonce-exchange new-tab flow
+ * and the postMessage origin check.
+ *
+ * Best-effort: errors logged and swallowed so a misconfigured container
+ * doesn't hard-fail the whole build.
+ */
+async function writeViteEnvLocal(projectDir: string): Promise<void> {
+  const viteKeys = Object.keys(process.env).filter((k) => k.startsWith("VITE_"))
+  if (viteKeys.length === 0) {
+    console.warn("[dostack-plugin] no VITE_* env vars to inject — skipping .env.local write")
+    return
+  }
+  const body = viteKeys
+    .map((k) => `${k}=${process.env[k]}`)
+    .join("\n") + "\n"
+  const path = join(projectDir, "frontend", ".env.local")
+  try {
+    await writeFile(path, body, "utf-8")
+    console.log(`[dostack-plugin] wrote ${viteKeys.length} VITE_* vars to ${path}`)
+  } catch (err) {
+    console.error("[dostack-plugin] failed to write .env.local:", err)
+  }
+}
 
 // The app-template Vite build outputs to frontend/dist. This is the path
 // inside the Fargate task workspace that the plugin inspects when packaging.
@@ -73,6 +103,11 @@ const dostackPlugin: Plugin = async (input, options) => {
       "[dostack-plugin] builder_auth_token / build_job_id / coordinator_api_url missing — events will not be emitted",
     )
   }
+
+  // Inject VITE_* env vars into the generated app's build BEFORE any Vite
+  // build runs. Coordinator passes these in the container env; Vite needs
+  // them in a dotenv file.
+  await writeViteEnvLocal(projectDir)
 
   const beforePrompt = createBeforePromptHook(projectDir, client, { config, buildRequest })
 
